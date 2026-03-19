@@ -1,35 +1,30 @@
-import { createTestClient } from './setup';
-import { PrismaClient } from '@prisma/client';
-import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
-import path from 'path';
+import {
+  createRawClient,
+  createTestClient,
+  integrationProviders,
+  resetDatabase,
+  type IntegrationProvider,
+} from './harness';
 
-const DB_PATH = path.join(__dirname, '../../.test.db');
-const DB_URL = 'file:' + DB_PATH;
-
-function createRawClient() {
-  const adapter = new PrismaBetterSqlite3({ url: DB_URL });
-  return new PrismaClient({ adapter } as any);
-}
-
-describe('includeSoftDeleted option', () => {
-  let client: ReturnType<typeof createTestClient>;
-  let raw: PrismaClient;
+describe.each(integrationProviders)('includeSoftDeleted option (%s)', (provider: IntegrationProvider) => {
+  let client: any;
+  let raw: any;
 
   beforeAll(() => {
-    raw = createRawClient();
+    raw = createRawClient(provider);
   });
 
   afterAll(async () => {
-    await raw.$disconnect();
+    await raw?.$disconnect();
   });
 
   beforeEach(async () => {
-    await raw.$executeRawUnsafe('DELETE FROM "User"');
-    client = createTestClient();
+    await resetDatabase(raw);
+    client = createTestClient(provider);
   });
 
   afterEach(async () => {
-    await (client as any).$disconnect();
+    await client?.$disconnect();
   });
 
   it('findMany with includeSoftDeleted: true returns deleted and active', async () => {

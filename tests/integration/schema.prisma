@@ -1,7 +1,13 @@
-generator client {
+generator client_js {
   provider        = "prisma-client-js"
-  previewFeatures = ["driverAdapters"]
-  output          = "../../node_modules/.prisma/client"
+  output          = "./generated/prisma-client-js"
+}
+
+generator client {
+  provider               = "prisma-client"
+  output                 = "./generated/prisma-client"
+  moduleFormat           = "cjs"
+  generatedFileExtension = "cts"
 }
 
 datasource db {
