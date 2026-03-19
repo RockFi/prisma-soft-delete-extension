@@ -1,0 +1,46 @@
+{
+  "name": "@rockfi/prisma-soft-delete-extension",
+  "version": "0.1.0",
+  "description": "Soft-delete (paranoid) support for Prisma v7+ via client extensions",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "jest",
+    "test:unit": "jest tests/unit",
+    "test:integration": "jest tests/integration",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "@prisma/client": ">=7.0.0",
+    "prisma": ">=7.0.0"
+  },
+  "devDependencies": {
+    "@prisma/adapter-better-sqlite3": ">=7.0.0",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/jest": "^29.0.0",
+    "@types/node": "^20.0.0",
+    "better-sqlite3": "^9.0.0",
+    "jest": "^29.0.0",
+    "prisma": ">=7.0.0",
+    "ts-jest": "^29.0.0",
+    "ts-node": "^10.9.2",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
