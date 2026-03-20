@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { resolveConfig } from './config';
 import type { SoftDeleteConfig } from './types';
 import { buildModelMetadata, normalizeReadArgs, postProcessReadResult } from './readPath';
+import { normalizeRootUpdateManyArgs, normalizeWriteArgs } from './writePath';
 
 export function createSoftDeleteExtension(config: SoftDeleteConfig) {
   const models = resolveConfig(config);
@@ -73,6 +74,15 @@ export function createSoftDeleteExtension(config: SoftDeleteConfig) {
               where: args.where,
               data: { [cfg.field]: new Date() },
             });
+          },
+          async update({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
+            return query(normalizeWriteArgs(model, args, metadata, models));
+          },
+          async updateMany({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
+            return query(normalizeRootUpdateManyArgs(model, args, models));
+          },
+          async upsert({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
+            return query(normalizeWriteArgs(model, args, metadata, models));
           },
           async findFirst({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
             return handleRead(model, args, query);

@@ -17,7 +17,7 @@ interface RelationMetadata {
   isList: boolean;
 }
 
-interface ModelMetadata {
+export interface ModelMetadata {
   relations: Record<string, RelationMetadata>;
 }
 

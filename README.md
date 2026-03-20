@@ -91,6 +91,17 @@ createSoftDeleteExtension({
 | `delete()` | Sets timestamp field instead of removing the row | Physically deletes the record |
 | `deleteMany()` | Sets timestamp field on all matching rows | Physically deletes matching records |
 
+### Update Operations
+
+| Operation | Configured Model | Behavior |
+|-----------|------------------|----------|
+| `updateMany()` | Root or nested toMany | Excludes soft-deleted rows by adding `deletedAt: null` unless you already filter on `deletedAt` |
+| nested toOne `update` | Target model configured | Throws to avoid mutating a potentially soft-deleted related record |
+| nested toOne `upsert` | Target model configured | Throws to avoid mutating a potentially soft-deleted related record |
+| `update()` | Root | Passthrough |
+| `upsert()` | Root | Passthrough |
+| nested toMany `update` / `upsert` | Target model configured | Passthrough |
+
 ### Find Operations
 
 | Operation | Behavior |
@@ -139,6 +150,8 @@ The default is `includeSoftDeleted: false`, which filters out soft-deleted recor
 When `includeSoftDeleted: true` is set on a read query, the extension also skips nested relation filtering for that operation. That means:
 - nested toMany `include` / `select` relations are not forced to `deletedAt: null`
 - soft-deleted toOne relations are not converted to `null`
+
+This option only affects read queries. It does not change `updateMany()` filtering or nested write guards.
 
 ## Prisma Schema Requirement
 
