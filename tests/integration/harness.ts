@@ -132,12 +132,18 @@ export function createTestClient(provider: IntegrationProvider) {
     createSoftDeleteExtension({
       models: {
         User: true,
+        Profile: true,
+        Post: true,
+        Comment: true,
       },
     })
   );
 }
 
 export async function resetDatabase(client: any) {
+  await client.$executeRawUnsafe('DELETE FROM "Comment"');
+  await client.$executeRawUnsafe('DELETE FROM "Post"');
   await client.$executeRawUnsafe('DELETE FROM "User"');
+  await client.$executeRawUnsafe('DELETE FROM "Profile"');
   await client.$executeRawUnsafe('DELETE FROM "Tag"');
 }

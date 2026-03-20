@@ -1,24 +1,56 @@
 import { Prisma } from '@prisma/client';
 import { resolveConfig } from './config';
 import type { SoftDeleteConfig } from './types';
+import { buildModelMetadata, normalizeReadArgs, postProcessReadResult } from './readPath';
 
 export function createSoftDeleteExtension(config: SoftDeleteConfig) {
   const models = resolveConfig(config);
 
   return Prisma.defineExtension((client) => {
-    function handleFindWithSoftDelete(
+    const metadata = buildModelMetadata(client);
+
+    async function handleRead(
       model: string,
       args: any,
-      query: (args: any) => Promise<any>,
-      cfg: ReturnType<typeof models.get>
+      query: (args: any) => Promise<any>
     ): Promise<any> {
       const extArgs = args as typeof args & { includeSoftDeleted?: boolean };
       const { includeSoftDeleted, ...rest } = extArgs;
-      if (!cfg || includeSoftDeleted) return query(rest as typeof args);
-      return query({
-        ...rest,
-        where: { ...rest.where, [cfg.field]: null },
-      } as typeof args);
+      if (includeSoftDeleted) {
+        return query(rest as typeof args);
+      }
+
+      const normalized = normalizeReadArgs(model, rest, metadata, models);
+      const result = await query(normalized.args as typeof args);
+      return postProcessReadResult(result, normalized.node, models);
+    }
+
+    async function handleUniqueRead(
+      model: string,
+      args: any,
+      query: (args: any) => Promise<any>,
+      orThrow: boolean
+    ): Promise<any> {
+      const extArgs = args as typeof args & { includeSoftDeleted?: boolean };
+      const { includeSoftDeleted, ...rest } = extArgs;
+      if (includeSoftDeleted) {
+        return query(rest as typeof args);
+      }
+
+      const normalized = normalizeReadArgs(model, rest, metadata, models);
+      const cfg = models.get(model);
+
+      if (!cfg) {
+        const result = await query(normalized.args as typeof args);
+        return postProcessReadResult(result, normalized.node, models);
+      }
+
+      const anyClient = client as any;
+      const modelName = model.charAt(0).toLowerCase() + model.slice(1);
+      const result = await anyClient[modelName][orThrow ? 'findFirstOrThrow' : 'findFirst'](
+        normalized.args
+      );
+      return postProcessReadResult(result, normalized.node, models);
     }
 
     return client.$extends({
@@ -43,52 +75,19 @@ export function createSoftDeleteExtension(config: SoftDeleteConfig) {
             });
           },
           async findFirst({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
-            return handleFindWithSoftDelete(model, args, query, models.get(model));
+            return handleRead(model, args, query);
           },
           async findFirstOrThrow({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
-            return handleFindWithSoftDelete(model, args, query, models.get(model));
+            return handleRead(model, args, query);
           },
           async findMany({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
-            return handleFindWithSoftDelete(model, args, query, models.get(model));
+            return handleRead(model, args, query);
           },
           async findUnique({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
-            const cfg = models.get(model);
-            if (!cfg) return query(args);
-            const extArgs = args as typeof args & { includeSoftDeleted?: boolean };
-            const { includeSoftDeleted, ...rest } = extArgs;
-            const anyClient = client as any;
-            const modelName = model.charAt(0).toLowerCase() + model.slice(1);
-            if (includeSoftDeleted) {
-              return anyClient[modelName].findFirst({ ...rest });
-            }
-            return anyClient[modelName].findFirst({
-              ...rest,
-              where: { ...rest.where, [cfg.field]: null },
-            });
+            return handleUniqueRead(model, args, query, false);
           },
           async findUniqueOrThrow({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
-            const cfg = models.get(model);
-            if (!cfg) return query(args);
-            const extArgs = args as typeof args & { includeSoftDeleted?: boolean };
-            const { includeSoftDeleted, ...rest } = extArgs;
-            const anyClient = client as any;
-            const modelName = model.charAt(0).toLowerCase() + model.slice(1);
-            const result = await anyClient[modelName].findFirst(
-              includeSoftDeleted
-                ? { ...rest }
-                : { ...rest, where: { ...rest.where, [cfg.field]: null } }
-            );
-            if (result === null) {
-              throw new Prisma.PrismaClientKnownRequestError(
-                'An operation failed because it depends on one or more records that were required but not found.',
-                {
-                  code: 'P2025',
-                  clientVersion: Prisma.prismaVersion.client,
-                  meta: { cause: 'Record to find not found.' },
-                }
-              );
-            }
-            return result;
+            return handleUniqueRead(model, args, query, true);
           },
         },
       },
