@@ -103,6 +103,13 @@ createSoftDeleteExtension({
 
 Non-configured models bypass all soft-delete behavior entirely.
 
+### Nested Read Behavior
+
+- Nested relation filters in `where` are rewritten to exclude soft-deleted related records.
+- `include` and `select` on configured toMany relations automatically add a `where: { deletedAt: null }` filter unless you already provide a `deletedAt` predicate.
+- Included or selected configured toOne relations are returned as `null` when the related record is soft-deleted.
+- Deeply nested `include`, `select`, and relation predicates are handled recursively.
+
 ## `includeSoftDeleted` Option
 
 Pass `{ includeSoftDeleted: true }` to any find operation to include soft-deleted records:
@@ -129,6 +136,10 @@ const user = await prisma.user.findUnique({
 
 The default is `includeSoftDeleted: false`, which filters out soft-deleted records.
 
+When `includeSoftDeleted: true` is set on a read query, the extension also skips nested relation filtering for that operation. That means:
+- nested toMany `include` / `select` relations are not forced to `deletedAt: null`
+- soft-deleted toOne relations are not converted to `null`
+
 ## Prisma Schema Requirement
 
 Soft-delete fields must be nullable `DateTime` in your Prisma schema:
@@ -142,6 +153,16 @@ model User {
 ```
 
 When a record is soft-deleted, this field is set to the current timestamp. Active records have `null`.
+
+If a model can be soft-deleted and is returned through a toOne relation that you `include` or `select`, define that relation as optional in your Prisma schema. The extension nulls out soft-deleted toOne relations at runtime, so optional relation types are the safe schema shape.
+
+```prisma
+model Comment {
+  id       Int    @id @default(autoincrement())
+  authorId Int?
+  author   User?  @relation(fields: [authorId], references: [id])
+}
+```
 
 ## Prisma v7+
 
