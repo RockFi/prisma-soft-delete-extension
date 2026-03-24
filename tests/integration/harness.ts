@@ -135,6 +135,7 @@ export function createTestClient(provider: IntegrationProvider) {
         Profile: true,
         Post: true,
         Comment: true,
+        Membership: true,
       },
     })
   );
@@ -146,4 +147,5 @@ export async function resetDatabase(client: any) {
   await client.$executeRawUnsafe('DELETE FROM "User"');
   await client.$executeRawUnsafe('DELETE FROM "Profile"');
   await client.$executeRawUnsafe('DELETE FROM "Tag"');
+  await client.$executeRawUnsafe('DELETE FROM "Membership"');
 }

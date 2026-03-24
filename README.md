@@ -102,7 +102,7 @@ createSoftDeleteExtension({
 | `upsert()` | Root | Passthrough |
 | nested toMany `update` / `upsert` | Target model configured | Passthrough |
 
-### Find Operations
+### Query Operations
 
 | Operation | Behavior |
 |-----------|----------|
@@ -111,6 +111,9 @@ createSoftDeleteExtension({
 | `findFirstOrThrow()` | Excludes soft-deleted records; throws if none found or only deleted records match |
 | `findUnique()` | Returns `null` if the record is soft-deleted |
 | `findUniqueOrThrow()` | Throws `P2025` if the record is soft-deleted |
+| `count()` | Excludes soft-deleted records by default |
+| `aggregate()` | Excludes soft-deleted records by default |
+| `groupBy()` | Excludes soft-deleted records by default through `where`; `having` remains caller-controlled |
 
 Non-configured models bypass all soft-delete behavior entirely.
 
@@ -123,7 +126,7 @@ Non-configured models bypass all soft-delete behavior entirely.
 
 ## `includeSoftDeleted` Option
 
-Pass `{ includeSoftDeleted: true }` to any find operation to include soft-deleted records:
+Pass `{ includeSoftDeleted: true }` to supported query operations to include soft-deleted records:
 
 ```typescript
 // Get only active users
@@ -143,15 +146,38 @@ const user = await prisma.user.findUnique({
   where: { id: 1 },
   includeSoftDeleted: true,
 });
+
+// count including soft-deleted records
+const totalUsers = await prisma.user.count({
+  includeSoftDeleted: true,
+});
+
+// groupBy including soft-deleted records
+const groupedUsers = await prisma.user.groupBy({
+  by: ['name'],
+  _count: { _all: true },
+  includeSoftDeleted: true,
+});
 ```
 
 The default is `includeSoftDeleted: false`, which filters out soft-deleted records.
 
-When `includeSoftDeleted: true` is set on a read query, the extension also skips nested relation filtering for that operation. That means:
+When `includeSoftDeleted: true` is set on a supported query, the extension also skips nested relation filtering for that operation. That means:
 - nested toMany `include` / `select` relations are not forced to `deletedAt: null`
 - soft-deleted toOne relations are not converted to `null`
 
-This option only affects read queries. It does not change `updateMany()` filtering or nested write guards.
+This option affects `findMany()`, `findFirst()`, `findFirstOrThrow()`, `findUnique()`, `findUniqueOrThrow()`, `count()`, `aggregate()`, and `groupBy()`. It does not change raw queries, `updateMany()` filtering, passthrough write operations, or nested write guards.
+
+## Raw Queries
+
+Raw query APIs are intentionally out of scope for this package:
+
+- `$queryRaw`
+- `$queryRawUnsafe`
+- `$executeRaw`
+- `$executeRawUnsafe`
+
+They are passthrough and receive no soft-delete filtering. `findRaw` is also unsupported by this package; the extension targets Prisma's normal relational model query surface rather than provider-specific raw document APIs.
 
 ## Prisma Schema Requirement
 

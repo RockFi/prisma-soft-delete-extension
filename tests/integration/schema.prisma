@@ -38,6 +38,7 @@ model Post {
   authorId  Int?
   author    User?     @relation(fields: [authorId], references: [id])
   comments  Comment[]
+  tags      Tag[]
 }
 
 model Comment {
@@ -54,6 +55,17 @@ model Comment {
 }
 
 model Tag {
-  id   Int    @id @default(autoincrement())
-  name String
+  id    Int    @id @default(autoincrement())
+  name  String
+  posts Post[]
+}
+
+model Membership {
+  id          Int       @id @default(autoincrement())
+  workspaceId Int
+  externalId  String
+  name        String
+  deletedAt   DateTime?
+
+  @@unique([workspaceId, externalId])
 }

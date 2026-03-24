@@ -19,6 +19,7 @@ interface RelationMetadata {
 
 export interface ModelMetadata {
   relations: Record<string, RelationMetadata>;
+  compoundUniqueFields: Record<string, string[]>;
 }
 
 interface ReadRelationNode {
@@ -49,25 +50,63 @@ function emptyNode(): ReadResultNode {
   return { relations: {} };
 }
 
-function parseSchemaFieldTypes(schema: string): Record<string, Record<string, string>> {
-  const models: Record<string, Record<string, string>> = {};
+interface ParsedSchemaModel {
+  fieldTypes: Record<string, string>;
+  compoundUniqueFields: Record<string, string[]>;
+}
+
+function parseCompoundFields(line: string): { alias: string; fields: string[] } | null {
+  const match = line.match(/^@@(?:unique|id)\s*\(\s*\[([^\]]+)\](?:\s*,\s*name:\s*"([^"]+)")?/);
+  if (!match) {
+    return null;
+  }
+
+  const fields = match[1]
+    .split(',')
+    .map((field) => field.trim().match(/^(\w+)/)?.[1] ?? '')
+    .filter(Boolean);
+
+  if (fields.length < 2) {
+    return null;
+  }
+
+  return {
+    alias: match[2] ?? fields.join('_'),
+    fields,
+  };
+}
+
+function parseSchemaModels(schema: string): Record<string, ParsedSchemaModel> {
+  const models: Record<string, ParsedSchemaModel> = {};
   const modelPattern = /model\s+(\w+)\s+\{([\s\S]*?)\n\}/g;
 
   for (const match of schema.matchAll(modelPattern)) {
     const [, modelName, body] = match;
-    const fields: Record<string, string> = {};
+    const fieldTypes: Record<string, string> = {};
+    const compoundUniqueFields: Record<string, string[]> = {};
 
     for (const rawLine of body.split('\n')) {
       const line = rawLine.split('//')[0].trim();
-      if (!line || line.startsWith('@@')) continue;
+      if (!line) continue;
+
+      if (line.startsWith('@@')) {
+        const compound = parseCompoundFields(line);
+        if (compound) {
+          compoundUniqueFields[compound.alias] = compound.fields;
+        }
+        continue;
+      }
 
       const fieldMatch = line.match(/^(\w+)\s+([^\s]+)/);
       if (!fieldMatch) continue;
 
-      fields[fieldMatch[1]] = fieldMatch[2];
+      fieldTypes[fieldMatch[1]] = fieldMatch[2];
     }
 
-    models[modelName] = fields;
+    models[modelName] = {
+      fieldTypes,
+      compoundUniqueFields,
+    };
   }
 
   return models;
@@ -83,16 +122,17 @@ export function buildModelMetadata(client: any): Record<string, ModelMetadata> {
     );
   }
 
-  const parsedFieldTypes = parseSchemaFieldTypes(inlineSchema);
+  const parsedSchemaModels = parseSchemaModels(inlineSchema);
   const metadata: Record<string, ModelMetadata> = {};
 
   for (const [modelName, runtimeModel] of Object.entries(runtimeDataModel.models as Record<string, RuntimeModel>)) {
     const relations: Record<string, RelationMetadata> = {};
+    const parsedModel = parsedSchemaModels[modelName];
 
     for (const field of runtimeModel.fields) {
       if (field.kind !== 'object') continue;
 
-      const typeToken = parsedFieldTypes[modelName]?.[field.name];
+      const typeToken = parsedModel?.fieldTypes[field.name];
       if (!typeToken) {
         throw new Error(
           `prisma-soft-delete-extension: Unable to resolve relation metadata for ${modelName}.${field.name}.`
@@ -105,15 +145,58 @@ export function buildModelMetadata(client: any): Record<string, ModelMetadata> {
       };
     }
 
-    metadata[modelName] = { relations };
+    metadata[modelName] = {
+      relations,
+      compoundUniqueFields: parsedModel?.compoundUniqueFields ?? {},
+    };
   }
 
   return metadata;
 }
 
-function addActiveFilter(model: string, where: Record<string, any>, models: ResolvedModels): Record<string, any> {
+function hasScopedFieldPredicate(
+  model: string,
+  where: Record<string, any>,
+  metadata: Record<string, ModelMetadata>,
+  field: string
+): boolean {
+  if (hasOwn(where, field)) {
+    return true;
+  }
+
+  const relations = metadata[model]?.relations ?? {};
+
+  for (const [key, value] of Object.entries(where)) {
+    if (key !== 'AND' && key !== 'OR' && key !== 'NOT') {
+      if (relations[key]) {
+        continue;
+      }
+      continue;
+    }
+
+    if (Array.isArray(value)) {
+      if (value.some((entry) => isObject(entry) && hasScopedFieldPredicate(model, entry, metadata, field))) {
+        return true;
+      }
+      continue;
+    }
+
+    if (isObject(value) && hasScopedFieldPredicate(model, value, metadata, field)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function addActiveFilter(
+  model: string,
+  where: Record<string, any>,
+  metadata: Record<string, ModelMetadata>,
+  models: ResolvedModels
+): Record<string, any> {
   const cfg = models.get(model);
-  if (!cfg || hasOwn(where, cfg.field)) {
+  if (!cfg || hasScopedFieldPredicate(model, where, metadata, cfg.field)) {
     return where;
   }
 
@@ -127,14 +210,17 @@ function rewriteLogicalValue(
   model: string,
   value: unknown,
   metadata: Record<string, ModelMetadata>,
-  models: ResolvedModels
+  models: ResolvedModels,
+  applyRootFilter: boolean
 ): unknown {
   if (Array.isArray(value)) {
-    return value.map((entry) => (isObject(entry) ? rewriteWhere(model, entry, metadata, models, true) : entry));
+    return value.map((entry) =>
+      isObject(entry) ? rewriteWhere(model, entry, metadata, models, applyRootFilter) : entry
+    );
   }
 
   if (isObject(value)) {
-    return rewriteWhere(model, value, metadata, models, true);
+    return rewriteWhere(model, value, metadata, models, applyRootFilter);
   }
 
   return value;
@@ -205,10 +291,13 @@ function rewriteWhere(
 ): Record<string, any> {
   const next: Record<string, any> = {};
   const relations = metadata[model]?.relations ?? {};
+  const cfg = models.get(model);
+  const shouldApplyCurrentModelFilter =
+    applyRootFilter && !(cfg && hasScopedFieldPredicate(model, where, metadata, cfg.field));
 
   for (const [key, value] of Object.entries(where)) {
     if (key === 'AND' || key === 'OR' || key === 'NOT') {
-      next[key] = rewriteLogicalValue(model, value, metadata, models);
+      next[key] = rewriteLogicalValue(model, value, metadata, models, shouldApplyCurrentModelFilter);
       continue;
     }
 
@@ -223,7 +312,31 @@ function rewriteWhere(
     next[key] = value;
   }
 
-  return applyRootFilter ? addActiveFilter(model, next, models) : next;
+  return shouldApplyCurrentModelFilter ? addActiveFilter(model, next, metadata, models) : next;
+}
+
+function expandCompoundUniqueWhere(
+  model: string,
+  where: Record<string, any>,
+  metadata: Record<string, ModelMetadata>
+): Record<string, any> {
+  const next: Record<string, any> = { ...where };
+  const compoundUniqueFields = metadata[model]?.compoundUniqueFields ?? {};
+
+  for (const [alias, fields] of Object.entries(compoundUniqueFields)) {
+    if (!isObject(next[alias])) continue;
+
+    const compoundValue = next[alias];
+    delete next[alias];
+
+    for (const field of fields) {
+      if (hasOwn(compoundValue, field) && !hasOwn(next, field)) {
+        next[field] = compoundValue[field];
+      }
+    }
+  }
+
+  return next;
 }
 
 function rewriteSelectionSet(
@@ -317,7 +430,13 @@ export function normalizeReadArgs(
   const nextArgs = { ...(args ?? {}) };
   const node = emptyNode();
 
-  nextArgs.where = rewriteWhere(model, isObject(nextArgs.where) ? nextArgs.where : {}, metadata, models, true);
+  nextArgs.where = rewriteWhere(
+    model,
+    expandCompoundUniqueWhere(model, isObject(nextArgs.where) ? nextArgs.where : {}, metadata),
+    metadata,
+    models,
+    true
+  );
 
   if (isObject(nextArgs.include)) {
     const rewritten = rewriteSelectionSet(model, nextArgs.include, metadata, models);
@@ -332,6 +451,25 @@ export function normalizeReadArgs(
   }
 
   return { args: nextArgs, node };
+}
+
+export function normalizeFilterOnlyReadArgs(
+  model: string,
+  args: any,
+  metadata: Record<string, ModelMetadata>,
+  models: ResolvedModels
+): any {
+  const nextArgs = { ...(args ?? {}) };
+
+  nextArgs.where = rewriteWhere(
+    model,
+    expandCompoundUniqueWhere(model, isObject(nextArgs.where) ? nextArgs.where : {}, metadata),
+    metadata,
+    models,
+    true
+  );
+
+  return nextArgs;
 }
 
 function processRelationValue(
