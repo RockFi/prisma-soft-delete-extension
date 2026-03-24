@@ -102,6 +102,17 @@ createSoftDeleteExtension({
 | `upsert()` | Root | Passthrough |
 | nested toMany `update` / `upsert` | Target model configured | Passthrough |
 
+### Known Passthrough Behaviors in `v0.2`
+
+`v0.2` intentionally does not guard every Prisma write API. The following operations remain passthrough even for configured models:
+
+- root `update()`
+- root `upsert()`
+- nested toMany `update`
+- nested toMany `upsert`
+
+These paths can still mutate soft-deleted rows if you target them directly. This is a documented limitation of `v0.2`, not an implicit guarantee gap.
+
 ### Find Operations
 
 | Operation | Behavior |
@@ -151,7 +162,7 @@ When `includeSoftDeleted: true` is set on a read query, the extension also skips
 - nested toMany `include` / `select` relations are not forced to `deletedAt: null`
 - soft-deleted toOne relations are not converted to `null`
 
-This option only affects read queries. It does not change `updateMany()` filtering or nested write guards.
+This option only affects read queries. It does not change `updateMany()` filtering, passthrough write operations, or nested write guards.
 
 ## Prisma Schema Requirement
 
