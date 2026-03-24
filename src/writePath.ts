@@ -1,27 +1,12 @@
-import type { ResolvedModelConfig } from './types';
-import type { ModelMetadata } from './readPath';
-
-type ResolvedModels = Map<string, ResolvedModelConfig>;
-
-function isObject(value: unknown): value is Record<string, any> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function hasOwn(value: Record<string, any>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
-function addActiveFilter(model: string, where: Record<string, any>, models: ResolvedModels): Record<string, any> {
-  const cfg = models.get(model);
-  if (!cfg || hasOwn(where, cfg.field)) {
-    return where;
-  }
-
-  return {
-    ...where,
-    [cfg.field]: null,
-  };
-}
+import type { ModelMetadata, ResolvedModels } from './metadata';
+import {
+  addActiveFilter,
+  constrainToDeleted,
+  expandCompoundUniqueWhere,
+  getConfiguredModelOrThrow,
+  getModelDelegate,
+  isObject,
+} from './metadata';
 
 function mapOperationEntries(value: unknown, mapper: (entry: Record<string, any>) => Record<string, any>): unknown {
   if (Array.isArray(value)) {
@@ -44,14 +29,28 @@ function throwToOneWriteError(operation: 'update' | 'upsert', targetModel: strin
   );
 }
 
-function normalizeUpdateManyEnvelope(
+function throwDeletedUpsertError(targetModel: string, path?: string): never {
+  const location = path ? ` through "${path}"` : '';
+
+  throw new Error(
+    `prisma-soft-delete-extension: upsert of model "${targetModel}"${location} found a soft deleted record. Restore it with "restore()" or permanently remove it with "hardDelete()" before calling upsert().`
+  );
+}
+
+function normalizeUpdateEnvelope(
   targetModel: string,
   value: Record<string, any>,
+  metadata: Record<string, ModelMetadata>,
   models: ResolvedModels
 ): Record<string, any> {
   return {
     ...value,
-    where: addActiveFilter(targetModel, isObject(value.where) ? value.where : {}, models),
+    where: addActiveFilter(
+      targetModel,
+      expandCompoundUniqueWhere(targetModel, isObject(value.where) ? value.where : {}, metadata),
+      metadata,
+      models
+    ),
   };
 }
 
@@ -77,19 +76,23 @@ function normalizeNestedData(
     if (relation.isList) {
       if (relationPayload.updateMany !== undefined) {
         relationPayload.updateMany = mapOperationEntries(relationPayload.updateMany, (entry) =>
-          normalizeUpdateManyEnvelope(relation.targetModel, entry, models)
+          normalizeUpdateEnvelope(relation.targetModel, entry, metadata, models)
         );
       }
 
       if (relationPayload.update !== undefined) {
-        relationPayload.update = mapOperationEntries(relationPayload.update, (entry) =>
-          isObject(entry.data)
-            ? {
-                ...entry,
-                data: normalizeNestedData(relation.targetModel, entry.data, metadata, models, relation.targetModel),
-              }
-            : entry
-        );
+        relationPayload.update = mapOperationEntries(relationPayload.update, (entry) => ({
+          ...entry,
+          where: addActiveFilter(
+            relation.targetModel,
+            expandCompoundUniqueWhere(relation.targetModel, isObject(entry.where) ? entry.where : {}, metadata),
+            metadata,
+            models
+          ),
+          data: isObject(entry.data)
+            ? normalizeNestedData(relation.targetModel, entry.data, metadata, models, relation.targetModel)
+            : entry.data,
+        }));
       }
 
       if (relationPayload.upsert !== undefined) {
@@ -170,9 +173,89 @@ function normalizeNestedData(
   return next;
 }
 
-export function normalizeRootUpdateManyArgs(
+async function hasDeletedTarget(
+  model: string,
+  where: Record<string, any>,
+  baseClient: any,
+  metadata: Record<string, ModelMetadata>,
+  models: ResolvedModels
+): Promise<boolean> {
+  const cfg = getConfiguredModelOrThrow(model, models, 'Soft-delete lifecycle');
+  const delegate = getModelDelegate(baseClient, model);
+  const deletedRow = await delegate.findFirst({
+    where: constrainToDeleted(model, expandCompoundUniqueWhere(model, where, metadata), models),
+    select: {
+      [cfg.field]: true,
+    },
+  });
+
+  return deletedRow != null;
+}
+
+async function assertNestedUpsertTargetsAllowed(
+  model: string,
+  data: Record<string, any>,
+  baseClient: any,
+  metadata: Record<string, ModelMetadata>,
+  models: ResolvedModels,
+  path: string
+): Promise<void> {
+  const relations = metadata[model]?.relations ?? {};
+
+  for (const [fieldName, fieldValue] of Object.entries(data)) {
+    const relation = relations[fieldName];
+    if (!relation || !isObject(fieldValue)) {
+      continue;
+    }
+
+    const relationPath = `${path}.${fieldName}`;
+    const relationPayload = fieldValue as Record<string, any>;
+
+    if (relation.isList && relationPayload.upsert !== undefined && models.has(relation.targetModel)) {
+      const entries = Array.isArray(relationPayload.upsert) ? relationPayload.upsert : [relationPayload.upsert];
+
+      for (const entry of entries) {
+        if (!isObject(entry)) continue;
+        if (await hasDeletedTarget(relation.targetModel, isObject(entry.where) ? entry.where : {}, baseClient, metadata, models)) {
+          throwDeletedUpsertError(relation.targetModel, relationPath);
+        }
+      }
+    }
+
+    if (relation.isList) {
+      for (const key of ['update', 'upsert', 'create', 'connectOrCreate'] as const) {
+        const value = relationPayload[key];
+        const entries = Array.isArray(value) ? value : value === undefined ? [] : [value];
+
+        for (const entry of entries) {
+          if (!isObject(entry)) continue;
+          if (isObject(entry.data)) {
+            await assertNestedUpsertTargetsAllowed(relation.targetModel, entry.data, baseClient, metadata, models, relation.targetModel);
+          }
+          if (isObject(entry.update)) {
+            await assertNestedUpsertTargetsAllowed(relation.targetModel, entry.update, baseClient, metadata, models, relation.targetModel);
+          }
+          if (isObject(entry.create)) {
+            await assertNestedUpsertTargetsAllowed(relation.targetModel, entry.create, baseClient, metadata, models, relation.targetModel);
+          }
+        }
+      }
+
+      continue;
+    }
+
+    for (const nested of [relationPayload.update, relationPayload.create, relationPayload.connectOrCreate?.create]) {
+      if (isObject(nested)) {
+        await assertNestedUpsertTargetsAllowed(relation.targetModel, nested, baseClient, metadata, models, relation.targetModel);
+      }
+    }
+  }
+}
+
+export function normalizeRootUpdateArgs(
   model: string,
   args: any,
+  metadata: Record<string, ModelMetadata>,
   models: ResolvedModels
 ): any {
   if (!isObject(args)) {
@@ -181,7 +264,33 @@ export function normalizeRootUpdateManyArgs(
 
   return {
     ...args,
-    where: addActiveFilter(model, isObject(args.where) ? args.where : {}, models),
+    where: addActiveFilter(
+      model,
+      expandCompoundUniqueWhere(model, isObject(args.where) ? args.where : {}, metadata),
+      metadata,
+      models
+    ),
+  };
+}
+
+export function normalizeRootUpdateManyArgs(
+  model: string,
+  args: any,
+  metadata: Record<string, ModelMetadata>,
+  models: ResolvedModels
+): any {
+  if (!isObject(args)) {
+    return args;
+  }
+
+  return {
+    ...args,
+    where: addActiveFilter(
+      model,
+      expandCompoundUniqueWhere(model, isObject(args.where) ? args.where : {}, metadata),
+      metadata,
+      models
+    ),
   };
 }
 
@@ -199,4 +308,34 @@ export function normalizeWriteArgs(
     ...args,
     data: normalizeNestedData(model, args.data, metadata, models, model),
   };
+}
+
+export async function assertRootUpsertTargetActiveOrAbsent(
+  model: string,
+  args: any,
+  baseClient: any,
+  metadata: Record<string, ModelMetadata>,
+  models: ResolvedModels
+): Promise<void> {
+  if (!models.has(model) || !isObject(args?.where)) {
+    return;
+  }
+
+  if (await hasDeletedTarget(model, args.where, baseClient, metadata, models)) {
+    throwDeletedUpsertError(model);
+  }
+}
+
+export async function assertNestedUpsertTargetsActiveOrAbsent(
+  model: string,
+  args: any,
+  baseClient: any,
+  metadata: Record<string, ModelMetadata>,
+  models: ResolvedModels
+): Promise<void> {
+  if (!isObject(args?.data)) {
+    return;
+  }
+
+  await assertNestedUpsertTargetsAllowed(model, args.data, baseClient, metadata, models, model);
 }
