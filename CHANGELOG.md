@@ -1,3 +1,10 @@
+## [1.0.2](https://github.com/RockFi/prisma-soft-delete-extension/compare/v1.0.1...v1.0.2) (2026-03-25)
+
+
+### Bug Fixes
+
+* expand contributing guide ([350e771](https://github.com/RockFi/prisma-soft-delete-extension/commit/350e771fbb1b242d1ba7bad1d76b8261de7d64eb))
+
 ## [1.0.1](https://github.com/RockFi/prisma-soft-delete-extension/compare/v1.0.0...v1.0.1) (2026-03-25)
 
 

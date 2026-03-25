@@ -1,6 +1,6 @@
 {
   "name": "@thenkei/prisma-soft-delete-extension",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Soft-delete (paranoid) support for Prisma v7+ via client extensions",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
