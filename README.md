@@ -1,4 +1,4 @@
-# @rockfi/prisma-soft-delete-extension
+# @thenkei/prisma-soft-delete-extension
 
 Soft-delete support for Prisma v7+ via client extensions.
 
@@ -7,7 +7,7 @@ This extension turns configured `delete()` / `deleteMany()` calls into timestamp
 ## Installation
 
 ```bash
-npm install @rockfi/prisma-soft-delete-extension
+npm install @thenkei/prisma-soft-delete-extension
 ```
 
 Peer dependencies:
@@ -30,7 +30,7 @@ Extend your Prisma client:
 
 ```ts
 import { PrismaClient } from '@prisma/client';
-import { createSoftDeleteExtension } from '@rockfi/prisma-soft-delete-extension';
+import { createSoftDeleteExtension } from '@thenkei/prisma-soft-delete-extension';
 
 const prisma = new PrismaClient().$extends(
   createSoftDeleteExtension({
@@ -250,18 +250,26 @@ model Comment {
 
 This package requires Prisma v7+ and uses `Prisma.defineExtension`.
 
-## Release Verification
+## Release Process
 
-Before publishing:
+Versioning and publishing are managed by GitHub Actions and semantic-release.
+
+- Pull requests into `main` run CI.
+- Pushes to `main` run CI and then semantic-release.
+- Do not manually bump `package.json` versions or hand-edit `CHANGELOG.md` for releases.
+- Use conventional commits so semantic-release can determine the correct version bump:
+  - `fix:` for patch releases
+  - `feat:` for minor releases
+  - `BREAKING CHANGE:` or `!` for major releases
+
+Local release verification:
 
 ```bash
-npm run build
-npm test
-npm run typecheck
+npm run ci
 npm pack
 ```
 
-See [CHANGELOG.md](./CHANGELOG.md) for release history and [UPGRADE.md](./UPGRADE.md) for `0.x` to `1.0.0` migration notes.
+See [CHANGELOG.md](./CHANGELOG.md) for release history and [UPGRADE.md](./UPGRADE.md) for `0.x` to `1.0.0` migration notes. The release workflow publishes to npm using `secrets.NPM_TOKEN` and creates the matching GitHub release automatically.
 
 ## License
 
