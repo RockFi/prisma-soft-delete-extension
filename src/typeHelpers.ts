@@ -1,3 +1,5 @@
+import type { SoftDeleteConfig } from './types';
+
 type SoftDeleteReadMethodName =
   | 'findMany'
   | 'findFirst'
@@ -28,6 +30,9 @@ type WithSoftDeleteDelegateTypes<T> = Omit<T, SoftDeleteReadMethodName> & {
   [K in Extract<keyof T, SoftDeleteReadMethodName>]: WithIncludeSoftDeletedOverload<T[K]>;
 };
 
+export type EnabledModelProps<C extends { models: Record<string, unknown> }> =
+  Uncapitalize<Extract<keyof C['models'], string>>;
+
 /**
  * Type-only view of a Prisma client with `includeSoftDeleted` added to supported read methods.
  *
@@ -41,10 +46,28 @@ export type SoftDeleteTypedClient<T> = T & {
       : WithSoftDeleteDelegateTypes<T[K]>;
 };
 
+export type SelectiveSoftDeleteTypedClient<
+  TClient,
+  C extends { models: Record<string, unknown> },
+> = TClient & {
+  [K in keyof TClient]: K extends EnabledModelProps<C>
+    ? WithSoftDeleteDelegateTypes<TClient[K]>
+    : TClient[K];
+};
+
 /**
  * Returns the input client unchanged at runtime while widening supported read-method types
  * to accept `includeSoftDeleted?: boolean`.
+ *
+ * Pass the original soft-delete config as the second argument to widen only configured
+ * model delegates. Omitting it keeps the broader compatibility behavior and widens all
+ * model delegates.
  */
-export function withSoftDeleteTypes<T>(client: T): SoftDeleteTypedClient<T> {
+export function withSoftDeleteTypes<T>(client: T): SoftDeleteTypedClient<T>;
+export function withSoftDeleteTypes<T, const C extends SoftDeleteConfig>(
+  client: T,
+  config: C
+): SelectiveSoftDeleteTypedClient<T, C>;
+export function withSoftDeleteTypes<T>(client: T, _config?: SoftDeleteConfig): SoftDeleteTypedClient<T> {
   return client as SoftDeleteTypedClient<T>;
 }

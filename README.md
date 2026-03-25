@@ -32,17 +32,19 @@ Extend your Prisma client:
 import { PrismaClient } from '@prisma/client';
 import {
   createSoftDeleteExtension,
+  defineSoftDeleteConfig,
   withSoftDeleteTypes,
 } from '@thenkei/prisma-soft-delete-extension';
 
+const config = defineSoftDeleteConfig({
+  models: {
+    User: true,
+  },
+});
+
 const prisma = withSoftDeleteTypes(
-  new PrismaClient().$extends(
-    createSoftDeleteExtension({
-      models: {
-        User: true,
-      },
-    })
-  )
+  new PrismaClient().$extends(createSoftDeleteExtension(config)),
+  config
 );
 ```
 
@@ -93,6 +95,33 @@ createSoftDeleteExtension({
 ```
 
 Models omitted from `models` are full passthrough.
+
+If you want model-selective TypeScript support for `includeSoftDeleted`, preserve the config's model-name literals with either `satisfies SoftDeleteConfig` or `defineSoftDeleteConfig()`:
+
+```ts
+import {
+  createSoftDeleteExtension,
+  defineSoftDeleteConfig,
+  type SoftDeleteConfig,
+} from '@thenkei/prisma-soft-delete-extension';
+
+const configWithSatisfies = {
+  models: {
+    User: true,
+    Post: { field: 'archivedAt' },
+  },
+} satisfies SoftDeleteConfig;
+
+const configWithHelper = defineSoftDeleteConfig({
+  models: {
+    User: true,
+    Post: { field: 'archivedAt' },
+  },
+});
+
+createSoftDeleteExtension(configWithSatisfies);
+createSoftDeleteExtension(configWithHelper);
+```
 
 ## Behavior Matrix
 
@@ -164,7 +193,7 @@ Pass `includeSoftDeleted: true` to these operations:
 - `aggregate()`
 - `groupBy()`
 
-For TypeScript projects, wrap the final extended client in `withSoftDeleteTypes()` to expose `includeSoftDeleted` on supported read methods without call-site casts.
+For TypeScript projects, wrap the final extended client in `withSoftDeleteTypes(client, config)` to expose `includeSoftDeleted` only on configured soft-delete models. Omitting the second argument keeps the previous broad typing behavior and widens all model delegates.
 
 Examples:
 
@@ -182,6 +211,9 @@ const groupedUsers = await prisma.user.groupBy({
   _count: { _all: true },
   includeSoftDeleted: true,
 });
+
+// Property 'includeSoftDeleted' does not exist on Tag args because Tag is not configured.
+// await prisma.tag.findMany({ includeSoftDeleted: true });
 ```
 
 When `includeSoftDeleted: true` is set, nested relation filtering is skipped for that operation as well.

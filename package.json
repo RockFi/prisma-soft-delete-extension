@@ -17,11 +17,12 @@
   ],
   "scripts": {
     "build": "tsup",
-    "ci": "npm run typecheck && npm test -- --runInBand && npm run build",
+    "ci": "npm run typecheck && npm test -- --runInBand && npm run typecheck:usage && npm run build",
     "test": "jest",
     "test:unit": "jest tests/unit",
     "test:integration": "jest tests/integration",
     "typecheck": "tsc --noEmit",
+    "typecheck:usage": "tsc -p tsconfig.type-tests.json --noEmit",
     "prepublishOnly": "npm run build"
   },
   "peerDependencies": {

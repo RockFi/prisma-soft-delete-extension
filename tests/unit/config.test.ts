@@ -1,6 +1,17 @@
-import { resolveConfig } from '../../src/config';
+import { defineSoftDeleteConfig, resolveConfig } from '../../src/config';
 
 describe('resolveConfig', () => {
+  it('defineSoftDeleteConfig returns the original config object', () => {
+    const config = {
+      models: {
+        User: true,
+        Post: { field: 'archivedAt' },
+      },
+    } as const;
+
+    expect(defineSoftDeleteConfig(config)).toBe(config);
+  });
+
   it('defaults field to deletedAt when omitted', () => {
     const result = resolveConfig({ models: { User: true } });
     expect(result.get('User')).toEqual({ field: 'deletedAt' });
