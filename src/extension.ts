@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client/extension';
 import { resolveConfig } from './config';
 import { createLifecycleMethods } from './lifecycle';
 import { buildModelMetadata, getModelDelegate } from './metadata';

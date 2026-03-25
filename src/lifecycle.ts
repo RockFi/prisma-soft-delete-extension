@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client/extension';
 import type { ModelMetadata, ResolvedModels } from './metadata';
 import {
   constrainToDeleted,
