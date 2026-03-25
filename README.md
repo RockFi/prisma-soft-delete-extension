@@ -1,8 +1,8 @@
 # @rockfi/prisma-soft-delete-extension
 
-Soft-delete (paranoid) support for Prisma v7+ via client extensions.
+Soft-delete support for Prisma v7+ via client extensions.
 
-Instead of permanently deleting records, this extension marks them as deleted by setting a timestamp field, allowing you to preserve data while hiding it from normal queries.
+This extension turns configured `delete()` / `deleteMany()` calls into timestamp updates, filters soft-deleted rows from the normal Prisma query surface, adds lifecycle helpers for restore and intentional hard delete, and blocks write paths that would otherwise mutate deleted rows silently.
 
 ## Installation
 
@@ -10,13 +10,13 @@ Instead of permanently deleting records, this extension marks them as deleted by
 npm install @rockfi/prisma-soft-delete-extension
 ```
 
-**Peer dependencies:**
+Peer dependencies:
 - `@prisma/client >=7.0.0`
 - `prisma >=7.0.0`
 
 ## Quick Start
 
-Add a nullable `DateTime` field to your Prisma schema:
+Add a nullable `DateTime` field to each soft-deleted model:
 
 ```prisma
 model User {
@@ -28,7 +28,7 @@ model User {
 
 Extend your Prisma client:
 
-```typescript
+```ts
 import { PrismaClient } from '@prisma/client';
 import { createSoftDeleteExtension } from '@rockfi/prisma-soft-delete-extension';
 
@@ -39,131 +39,133 @@ const prisma = new PrismaClient().$extends(
     },
   })
 );
-
-// Now when you delete a user, the deletedAt field is set instead of removing the row
-await prisma.user.delete({ where: { id: 1 } });
-
-// findMany automatically excludes soft-deleted records
-const activeUsers = await prisma.user.findMany();
-
-// Include deleted records when needed
-const allUsers = await prisma.user.findMany({ includeSoftDeleted: true });
 ```
 
-## Configuration Reference
+Basic lifecycle:
 
-### `field` (optional)
+```ts
+const user = await prisma.user.create({ data: { name: 'Alice' } });
 
-Global default soft-delete field name. Defaults to `'deletedAt'`.
+await prisma.user.delete({ where: { id: user.id } });
 
-```typescript
+const hidden = await prisma.user.findUnique({ where: { id: user.id } });
+// hidden === null
+
+await prisma.user.restore({ where: { id: user.id } });
+
+await prisma.user.delete({ where: { id: user.id } });
+await prisma.user.hardDelete({ where: { id: user.id } });
+```
+
+## Configuration
+
+### `field`
+
+Global soft-delete field name. Defaults to `deletedAt`.
+
+```ts
 createSoftDeleteExtension({
-  field: 'deletedAt', // optional, this is the default
-  models: { /* ... */ },
-})
+  field: 'deletedAt',
+  models: { User: true },
+});
 ```
 
 ### `models`
 
-Record mapping model names to configuration. Model names must be **PascalCase** (matching your Prisma schema exactly).
+Model names must match the Prisma schema exactly.
 
-**Value types:**
-- `true` — use the global field name
-- `{ field: 'customFieldName' }` — use a custom field for this model
+- `true`: use the global field
+- `{ field: 'customField' }`: override the field for one model
 
-```typescript
+```ts
 createSoftDeleteExtension({
   models: {
-    User: true,                          // uses 'deletedAt'
-    Post: { field: 'archivedAt' },       // uses 'archivedAt'
-    Comment: { field: 'removedAt' },     // uses 'removedAt'
-    // Tag is omitted → full passthrough (no soft delete behavior)
+    User: true,
+    Post: { field: 'archivedAt' },
+    Comment: { field: 'removedAt' },
   },
-})
+});
 ```
 
-## API Behavior
+Models omitted from `models` are full passthrough.
 
-### Delete Operations
+## Behavior Matrix
 
-| Operation | Configured Model | Unconfigured Model |
+### Delete
+
+| Operation | Configured model | Unconfigured model |
 |-----------|------------------|--------------------|
-| `delete()` | Sets timestamp field instead of removing the row | Physically deletes the record |
-| `deleteMany()` | Sets timestamp field on all matching rows | Physically deletes matching records |
+| `delete()` | Sets the soft-delete field to the current timestamp | Physical delete |
+| `deleteMany()` | Sets the soft-delete field on matching rows | Physical delete |
 
-### Update Operations
+### Lifecycle
 
-| Operation | Configured Model | Behavior |
-|-----------|------------------|----------|
-| `updateMany()` | Root or nested toMany | Excludes soft-deleted rows by adding `deletedAt: null` unless you already filter on `deletedAt` |
-| nested toOne `update` | Target model configured | Throws to avoid mutating a potentially soft-deleted related record |
-| nested toOne `upsert` | Target model configured | Throws to avoid mutating a potentially soft-deleted related record |
-| `update()` | Root | Passthrough |
-| `upsert()` | Root | Passthrough |
-| nested toMany `update` / `upsert` | Target model configured | Passthrough |
+| Operation | Configured model | Unconfigured model |
+|-----------|------------------|--------------------|
+| `restore()` | Restores one previously deleted row; throws `P2025` if the row is active or missing | Throws configuration error |
+| `restoreMany()` | Restores only deleted matching rows; returns `{ count: 0 }` when none match | Throws configuration error |
+| `hardDelete()` | Physically deletes one previously deleted row; throws `P2025` if the row is active or missing | Throws configuration error |
+| `hardDeleteMany()` | Physically deletes only deleted matching rows; returns `{ count: 0 }` when none match | Throws configuration error |
 
-### Known Passthrough Behaviors in `v0.2`
+### Query
 
-`v0.2` intentionally does not guard every Prisma write API. The following operations remain passthrough even for configured models:
+| Operation | Configured model behavior |
+|-----------|---------------------------|
+| `findMany()` | Excludes soft-deleted rows |
+| `findFirst()` | Excludes soft-deleted rows |
+| `findFirstOrThrow()` | Excludes soft-deleted rows |
+| `findUnique()` | Returns `null` for a soft-deleted row |
+| `findUniqueOrThrow()` | Throws `P2025` for a soft-deleted row |
+| `count()` | Excludes soft-deleted rows |
+| `aggregate()` | Excludes soft-deleted rows |
+| `groupBy()` | Excludes soft-deleted rows through `where`; `having` stays caller-controlled |
 
-- root `update()`
-- root `upsert()`
-- nested toMany `update`
-- nested toMany `upsert`
+Unconfigured models are passthrough for all query operations.
 
-These paths can still mutate soft-deleted rows if you target them directly. This is a documented limitation of `v0.2`, not an implicit guarantee gap.
+### Update / Upsert
 
-### Find Operations
+| Operation | Configured model behavior |
+|-----------|---------------------------|
+| root `update()` | Active-only by default; explicit `deletedAt` predicates override |
+| root `updateMany()` | Active-only by default; explicit `deletedAt` predicates override |
+| root `upsert()` | Throws if the target row exists and is soft-deleted |
+| nested toMany `update()` | Active-only by default; explicit `deletedAt` predicates override |
+| nested toMany `updateMany()` | Active-only by default; explicit `deletedAt` predicates override |
+| nested toMany `upsert()` | Throws if the target row exists and is soft-deleted |
+| nested toOne `update()` | Throws |
+| nested toOne `upsert()` | Throws |
 
-| Operation | Behavior |
-|-----------|----------|
-| `findMany()` | Excludes soft-deleted records (where field is `null`) |
-| `findFirst()` | Excludes soft-deleted records |
-| `findFirstOrThrow()` | Excludes soft-deleted records; throws if none found or only deleted records match |
-| `findUnique()` | Returns `null` if the record is soft-deleted |
-| `findUniqueOrThrow()` | Throws `P2025` if the record is soft-deleted |
-| `count()` | Excludes soft-deleted records by default |
-| `aggregate()` | Excludes soft-deleted records by default |
-| `groupBy()` | Excludes soft-deleted records by default through `where`; `having` remains caller-controlled |
+## Nested Read Rules
 
-Non-configured models bypass all soft-delete behavior entirely.
+- Relation filters in `where` are rewritten recursively to exclude soft-deleted configured models.
+- `include` and `select` on configured toMany relations automatically add `where: { deletedAt: null }` unless you already supply a `deletedAt` predicate.
+- Included or selected configured toOne relations become `null` when the related row is soft-deleted.
+- Compound-unique `findUnique()` and `findUniqueOrThrow()` stay soft-delete aware.
 
-### Nested Read Behavior
+## `includeSoftDeleted`
 
-- Nested relation filters in `where` are rewritten to exclude soft-deleted related records.
-- `include` and `select` on configured toMany relations automatically add a `where: { deletedAt: null }` filter unless you already provide a `deletedAt` predicate.
-- Included or selected configured toOne relations are returned as `null` when the related record is soft-deleted.
-- Deeply nested `include`, `select`, and relation predicates are handled recursively.
+Pass `includeSoftDeleted: true` to these operations:
 
-## `includeSoftDeleted` Option
+- `findMany()`
+- `findFirst()`
+- `findFirstOrThrow()`
+- `findUnique()`
+- `findUniqueOrThrow()`
+- `count()`
+- `aggregate()`
+- `groupBy()`
 
-Pass `{ includeSoftDeleted: true }` to supported query operations to include soft-deleted records:
+Examples:
 
-```typescript
-// Get only active users
-const active = await prisma.user.findMany();
-
-// Get all users, including deleted ones
-const all = await prisma.user.findMany({ includeSoftDeleted: true });
-
-// findFirst with soft-deleted included
-const user = await prisma.user.findFirst({
-  where: { email: 'example@test.com' },
+```ts
+const allUsers = await prisma.user.findMany({
   includeSoftDeleted: true,
 });
 
-// findUnique with soft-deleted included
-const user = await prisma.user.findUnique({
-  where: { id: 1 },
-  includeSoftDeleted: true,
-});
-
-// count including soft-deleted records
 const totalUsers = await prisma.user.count({
   includeSoftDeleted: true,
 });
 
-// groupBy including soft-deleted records
 const groupedUsers = await prisma.user.groupBy({
   by: ['name'],
   _count: { _all: true },
@@ -171,40 +173,70 @@ const groupedUsers = await prisma.user.groupBy({
 });
 ```
 
-The default is `includeSoftDeleted: false`, which filters out soft-deleted records.
+When `includeSoftDeleted: true` is set, nested relation filtering is skipped for that operation as well.
 
-When `includeSoftDeleted: true` is set on a supported query, the extension also skips nested relation filtering for that operation. That means:
-- nested toMany `include` / `select` relations are not forced to `deletedAt: null`
-- soft-deleted toOne relations are not converted to `null`
+This option does not affect lifecycle methods, raw queries, or write hardening.
 
-This option affects `findMany()`, `findFirst()`, `findFirstOrThrow()`, `findUnique()`, `findUniqueOrThrow()`, `count()`, `aggregate()`, and `groupBy()`. It does not change raw queries, `updateMany()` filtering, passthrough write operations, or nested write guards.
+## Restore and Hard Delete Examples
+
+Restore one row:
+
+```ts
+await prisma.user.restore({
+  where: { id: 1 },
+});
+```
+
+Restore many deleted rows:
+
+```ts
+await prisma.user.restoreMany({
+  where: { name: 'archived-user' },
+});
+```
+
+Hard-delete one row that has already been soft-deleted:
+
+```ts
+await prisma.user.hardDelete({
+  where: { id: 1 },
+});
+```
+
+Hard-delete many deleted rows:
+
+```ts
+await prisma.user.hardDeleteMany({
+  where: {
+    deletedAt: { not: null },
+  },
+});
+```
 
 ## Raw Queries 
 
-Raw query APIs are intentionally out of scope for this package:
+These APIs are explicit passthrough and receive no soft-delete behavior:
 
 - `$queryRaw`
 - `$queryRawUnsafe`
 - `$executeRaw`
 - `$executeRawUnsafe`
 
-They are passthrough and receive no soft-delete filtering. `findRaw` is also unsupported by this package; the extension targets Prisma's normal relational model query surface rather than provider-specific raw document APIs.
+`findRaw` is also unsupported by this package. The extension targets Prisma's relational model query surface, not provider-specific raw document APIs.
 
-## Prisma Schema Requirement
+## Schema Requirements
 
-Soft-delete fields must be nullable `DateTime` in your Prisma schema:
+Soft-delete fields must be nullable `DateTime` fields with no default:
 
 ```prisma
 model User {
   id        Int       @id @default(autoincrement())
   name      String
-  deletedAt DateTime?  // nullable, no default value
+  deletedAt DateTime?
 }
 ```
 
-When a record is soft-deleted, this field is set to the current timestamp. Active records have `null`.
-
-If a model can be soft-deleted and is returned through a toOne relation that you `include` or `select`, define that relation as optional in your Prisma schema. The extension nulls out soft-deleted toOne relations at runtime, so optional relation types are the safe schema shape.
+If a configured model can be returned through a toOne relation that you `include` or `select`, make that relation optional in Prisma so runtime nulling is type-safe:
 
 ```prisma
 model Comment {
@@ -214,17 +246,22 @@ model Comment {
 }
 ```
 
-## Prisma v7+
+## Prisma Version
 
-This package requires **Prisma v7 or later** and uses `Prisma.defineExtension`, the modern extension API. It is not compatible with deprecated middleware.
+This package requires Prisma v7+ and uses `Prisma.defineExtension`.
 
-## Roadmap
+## Release Verification
 
-Planned features:
-- `restore()` — set the timestamp field back to `null` for a specific record
-- `restoreMany()` — restore multiple soft-deleted records
-- Permanent deletion helpers — safely delete records that are already soft-deleted
-- Scheduled hard deletes — automatically purge soft-deleted records after a retention period
+Before publishing:
+
+```bash
+npm run build
+npm test
+npm run typecheck
+npm pack
+```
+
+See [CHANGELOG.md](./CHANGELOG.md) for release history and [UPGRADE.md](./UPGRADE.md) for `0.x` to `1.0.0` migration notes.
 
 ## License
 

@@ -171,39 +171,106 @@ describe.each(integrationProviders)('soft delete: update paths (%s)', (provider:
     );
   });
 
-  it('root update remains passthrough', async () => {
+  it('root update only updates active rows by default', async () => {
+    const deleted = await raw.user.create({
+      data: { name: 'Deleted', deletedAt: new Date() },
+    });
+
+    await expect(
+      client.user.update({
+        where: { id: deleted.id },
+        data: { name: 'Still updatable' },
+      })
+    ).rejects.toMatchObject({
+      code: 'P2025',
+    });
+
+    const row = await raw.user.findUniqueOrThrow({ where: { id: deleted.id } });
+    expect(row.name).toBe('Deleted');
+    expect(row.deletedAt).not.toBeNull();
+  });
+
+  it('root update preserves explicit deletedAt overrides', async () => {
     const deleted = await raw.user.create({
       data: { name: 'Deleted', deletedAt: new Date() },
     });
 
     const result = await client.user.update({
-      where: { id: deleted.id },
-      data: { name: 'Still updatable' },
+      where: {
+        id: deleted.id,
+        deletedAt: { not: null },
+      },
+      data: { name: 'Restored target' },
     });
 
     expect(result.id).toBe(deleted.id);
     const row = await raw.user.findUniqueOrThrow({ where: { id: deleted.id } });
-    expect(row.name).toBe('Still updatable');
-    expect(row.deletedAt).not.toBeNull();
+    expect(row.name).toBe('Restored target');
   });
 
-  it('root upsert remains passthrough', async () => {
+  it('root upsert throws when the target row is soft-deleted', async () => {
     const deleted = await raw.user.create({
       data: { name: 'Deleted', deletedAt: new Date() },
     });
 
-    const result = await client.user.upsert({
-      where: { id: deleted.id },
-      create: { name: 'Created' },
-      update: { name: 'Upserted' },
-    });
+    await expect(
+      client.user.upsert({
+        where: { id: deleted.id },
+        create: { name: 'Created' },
+        update: { name: 'Upserted' },
+      })
+    ).rejects.toThrow(
+      'prisma-soft-delete-extension: upsert of model "User" found a soft deleted record. Restore it with "restore()" or permanently remove it with "hardDelete()" before calling upsert().'
+    );
 
-    expect(result.id).toBe(deleted.id);
     const row = await raw.user.findUniqueOrThrow({ where: { id: deleted.id } });
-    expect(row.name).toBe('Upserted');
+    expect(row.name).toBe('Deleted');
   });
 
-  it('nested toMany update remains passthrough', async () => {
+  it('root upsert still updates active rows', async () => {
+    const active = await raw.user.create({
+      data: { name: 'Active' },
+    });
+
+    const result = await client.user.upsert({
+      where: { id: active.id },
+      create: { name: 'Created' },
+      update: { name: 'Upserted active' },
+    });
+
+    expect(result.id).toBe(active.id);
+    const row = await raw.user.findUniqueOrThrow({ where: { id: active.id } });
+    expect(row.name).toBe('Upserted active');
+  });
+
+  it('nested toMany update only updates active rows by default', async () => {
+    const user = await raw.user.create({ data: { name: 'Alice' } });
+    const post = await raw.post.create({ data: { title: 'Post', authorId: user.id } });
+    const deletedComment = await raw.comment.create({
+      data: { content: 'Deleted', authorId: user.id, postId: post.id, deletedAt: new Date() },
+    });
+
+    await expect(
+      client.user.update({
+        where: { id: user.id },
+        data: {
+          comments: {
+            update: {
+              where: { id: deletedComment.id },
+              data: { content: 'Updated deleted' },
+            },
+          },
+        },
+      })
+    ).rejects.toMatchObject({
+      code: 'P2025',
+    });
+
+    const row = await raw.comment.findUniqueOrThrow({ where: { id: deletedComment.id } });
+    expect(row.content).toBe('Deleted');
+  });
+
+  it('nested toMany update preserves explicit deletedAt overrides', async () => {
     const user = await raw.user.create({ data: { name: 'Alice' } });
     const post = await raw.post.create({ data: { title: 'Post', authorId: user.id } });
     const deletedComment = await raw.comment.create({
@@ -215,7 +282,10 @@ describe.each(integrationProviders)('soft delete: update paths (%s)', (provider:
       data: {
         comments: {
           update: {
-            where: { id: deletedComment.id },
+            where: {
+              id: deletedComment.id,
+              deletedAt: { not: null },
+            },
             data: { content: 'Updated deleted' },
           },
         },
@@ -226,11 +296,39 @@ describe.each(integrationProviders)('soft delete: update paths (%s)', (provider:
     expect(row.content).toBe('Updated deleted');
   });
 
-  it('nested toMany upsert remains passthrough', async () => {
+  it('nested toMany upsert throws when the target row is soft-deleted', async () => {
     const user = await raw.user.create({ data: { name: 'Alice' } });
     const post = await raw.post.create({ data: { title: 'Post', authorId: user.id } });
     const deletedComment = await raw.comment.create({
       data: { content: 'Deleted', authorId: user.id, postId: post.id, deletedAt: new Date() },
+    });
+
+    await expect(
+      client.user.update({
+        where: { id: user.id },
+        data: {
+          comments: {
+            upsert: {
+              where: { id: deletedComment.id },
+              update: { content: 'Upserted deleted' },
+              create: { content: 'Created comment', postId: post.id },
+            },
+          },
+        },
+      })
+    ).rejects.toThrow(
+      'prisma-soft-delete-extension: upsert of model "Comment" through "User.comments" found a soft deleted record. Restore it with "restore()" or permanently remove it with "hardDelete()" before calling upsert().'
+    );
+
+    const row = await raw.comment.findUniqueOrThrow({ where: { id: deletedComment.id } });
+    expect(row.content).toBe('Deleted');
+  });
+
+  it('nested toMany upsert still updates active rows', async () => {
+    const user = await raw.user.create({ data: { name: 'Alice' } });
+    const post = await raw.post.create({ data: { title: 'Post', authorId: user.id } });
+    const activeComment = await raw.comment.create({
+      data: { content: 'Active', authorId: user.id, postId: post.id },
     });
 
     await client.user.update({
@@ -238,15 +336,15 @@ describe.each(integrationProviders)('soft delete: update paths (%s)', (provider:
       data: {
         comments: {
           upsert: {
-            where: { id: deletedComment.id },
-            update: { content: 'Upserted deleted' },
+            where: { id: activeComment.id },
+            update: { content: 'Upserted active' },
             create: { content: 'Created comment', postId: post.id },
           },
         },
       },
     });
 
-    const row = await raw.comment.findUniqueOrThrow({ where: { id: deletedComment.id } });
-    expect(row.content).toBe('Upserted deleted');
+    const row = await raw.comment.findUniqueOrThrow({ where: { id: activeComment.id } });
+    expect(row.content).toBe('Upserted active');
   });
 });

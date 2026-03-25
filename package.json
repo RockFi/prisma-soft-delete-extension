@@ -1,6 +1,6 @@
 {
   "name": "@rockfi/prisma-soft-delete-extension",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "Soft-delete (paranoid) support for Prisma v7+ via client extensions",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

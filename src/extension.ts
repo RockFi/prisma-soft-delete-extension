@@ -1,13 +1,20 @@
 import { Prisma } from '@prisma/client';
 import { resolveConfig } from './config';
+import { createLifecycleMethods } from './lifecycle';
+import { buildModelMetadata, getModelDelegate } from './metadata';
 import type { SoftDeleteConfig } from './types';
 import {
-  buildModelMetadata,
   normalizeFilterOnlyReadArgs,
   normalizeReadArgs,
   postProcessReadResult,
 } from './readPath';
-import { normalizeRootUpdateManyArgs, normalizeWriteArgs } from './writePath';
+import {
+  assertNestedUpsertTargetsActiveOrAbsent,
+  assertRootUpsertTargetActiveOrAbsent,
+  normalizeRootUpdateArgs,
+  normalizeRootUpdateManyArgs,
+  normalizeWriteArgs,
+} from './writePath';
 
 export function createSoftDeleteExtension(config: SoftDeleteConfig) {
   const models = resolveConfig(config);
@@ -51,9 +58,8 @@ export function createSoftDeleteExtension(config: SoftDeleteConfig) {
         return postProcessReadResult(result, normalized.node, models);
       }
 
-      const anyClient = client as any;
-      const modelName = model.charAt(0).toLowerCase() + model.slice(1);
-      const result = await anyClient[modelName][orThrow ? 'findFirstOrThrow' : 'findFirst'](
+      const delegate = getModelDelegate(client, model);
+      const result = await delegate[orThrow ? 'findFirstOrThrow' : 'findFirst'](
         normalized.args
       );
       return postProcessReadResult(result, normalized.node, models);
@@ -74,13 +80,15 @@ export function createSoftDeleteExtension(config: SoftDeleteConfig) {
     }
 
     return client.$extends({
+      model: {
+        $allModels: createLifecycleMethods(client, metadata, models),
+      },
       query: {
         $allModels: {
           async delete({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
             const cfg = models.get(model);
             if (!cfg) return query(args);
-            const anyClient = client as any;
-            return anyClient[model.charAt(0).toLowerCase() + model.slice(1)].update({
+            return getModelDelegate(client, model).update({
               where: args.where,
               data: { [cfg.field]: new Date() },
             });
@@ -88,20 +96,25 @@ export function createSoftDeleteExtension(config: SoftDeleteConfig) {
           async deleteMany({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
             const cfg = models.get(model);
             if (!cfg) return query(args);
-            const anyClient = client as any;
-            return anyClient[model.charAt(0).toLowerCase() + model.slice(1)].updateMany({
+            return getModelDelegate(client, model).updateMany({
               where: args.where,
               data: { [cfg.field]: new Date() },
             });
           },
           async update({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
-            return query(normalizeWriteArgs(model, args, metadata, models));
+            const normalizedRoot = normalizeRootUpdateArgs(model, args, metadata, models);
+            const normalizedArgs = normalizeWriteArgs(model, normalizedRoot, metadata, models);
+            await assertNestedUpsertTargetsActiveOrAbsent(model, normalizedArgs, client, metadata, models);
+            return query(normalizedArgs);
           },
           async updateMany({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
-            return query(normalizeRootUpdateManyArgs(model, args, models));
+            return query(normalizeRootUpdateManyArgs(model, args, metadata, models));
           },
           async upsert({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
-            return query(normalizeWriteArgs(model, args, metadata, models));
+            await assertRootUpsertTargetActiveOrAbsent(model, args, client, metadata, models);
+            const normalizedArgs = normalizeWriteArgs(model, args, metadata, models);
+            await assertNestedUpsertTargetsActiveOrAbsent(model, normalizedArgs, client, metadata, models);
+            return query(normalizedArgs);
           },
           async findFirst({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
             return handleRead(model, args, query);

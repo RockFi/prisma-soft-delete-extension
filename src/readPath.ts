@@ -1,26 +1,11 @@
-import type { ResolvedModelConfig } from './types';
-
-type ResolvedModels = Map<string, ResolvedModelConfig>;
-
-interface RuntimeField {
-  name: string;
-  kind: string;
-  type: string;
-}
-
-interface RuntimeModel {
-  fields: RuntimeField[];
-}
-
-interface RelationMetadata {
-  targetModel: string;
-  isList: boolean;
-}
-
-export interface ModelMetadata {
-  relations: Record<string, RelationMetadata>;
-  compoundUniqueFields: Record<string, string[]>;
-}
+import type { ModelMetadata, ResolvedModels } from './metadata';
+import {
+  addActiveFilter,
+  expandCompoundUniqueWhere,
+  hasOwn,
+  hasScopedFieldPredicate,
+  isObject,
+} from './metadata';
 
 interface ReadRelationNode {
   model: string;
@@ -38,172 +23,8 @@ interface NormalizeReadResult {
   node: ReadResultNode;
 }
 
-function isObject(value: unknown): value is Record<string, any> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function hasOwn(value: Record<string, any>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
 function emptyNode(): ReadResultNode {
   return { relations: {} };
-}
-
-interface ParsedSchemaModel {
-  fieldTypes: Record<string, string>;
-  compoundUniqueFields: Record<string, string[]>;
-}
-
-function parseCompoundFields(line: string): { alias: string; fields: string[] } | null {
-  const match = line.match(/^@@(?:unique|id)\s*\(\s*\[([^\]]+)\](?:\s*,\s*name:\s*"([^"]+)")?/);
-  if (!match) {
-    return null;
-  }
-
-  const fields = match[1]
-    .split(',')
-    .map((field) => field.trim().match(/^(\w+)/)?.[1] ?? '')
-    .filter(Boolean);
-
-  if (fields.length < 2) {
-    return null;
-  }
-
-  return {
-    alias: match[2] ?? fields.join('_'),
-    fields,
-  };
-}
-
-function parseSchemaModels(schema: string): Record<string, ParsedSchemaModel> {
-  const models: Record<string, ParsedSchemaModel> = {};
-  const modelPattern = /model\s+(\w+)\s+\{([\s\S]*?)\n\}/g;
-
-  for (const match of schema.matchAll(modelPattern)) {
-    const [, modelName, body] = match;
-    const fieldTypes: Record<string, string> = {};
-    const compoundUniqueFields: Record<string, string[]> = {};
-
-    for (const rawLine of body.split('\n')) {
-      const line = rawLine.split('//')[0].trim();
-      if (!line) continue;
-
-      if (line.startsWith('@@')) {
-        const compound = parseCompoundFields(line);
-        if (compound) {
-          compoundUniqueFields[compound.alias] = compound.fields;
-        }
-        continue;
-      }
-
-      const fieldMatch = line.match(/^(\w+)\s+([^\s]+)/);
-      if (!fieldMatch) continue;
-
-      fieldTypes[fieldMatch[1]] = fieldMatch[2];
-    }
-
-    models[modelName] = {
-      fieldTypes,
-      compoundUniqueFields,
-    };
-  }
-
-  return models;
-}
-
-export function buildModelMetadata(client: any): Record<string, ModelMetadata> {
-  const runtimeDataModel = client?._runtimeDataModel ?? client?._engineConfig?.runtimeDataModel;
-  const inlineSchema = client?._engineConfig?.inlineSchema;
-
-  if (!runtimeDataModel?.models || typeof inlineSchema !== 'string') {
-    throw new Error(
-      'prisma-soft-delete-extension: Prisma runtime metadata is unavailable; nested read filtering cannot be initialized.'
-    );
-  }
-
-  const parsedSchemaModels = parseSchemaModels(inlineSchema);
-  const metadata: Record<string, ModelMetadata> = {};
-
-  for (const [modelName, runtimeModel] of Object.entries(runtimeDataModel.models as Record<string, RuntimeModel>)) {
-    const relations: Record<string, RelationMetadata> = {};
-    const parsedModel = parsedSchemaModels[modelName];
-
-    for (const field of runtimeModel.fields) {
-      if (field.kind !== 'object') continue;
-
-      const typeToken = parsedModel?.fieldTypes[field.name];
-      if (!typeToken) {
-        throw new Error(
-          `prisma-soft-delete-extension: Unable to resolve relation metadata for ${modelName}.${field.name}.`
-        );
-      }
-
-      relations[field.name] = {
-        targetModel: field.type,
-        isList: typeToken.endsWith('[]'),
-      };
-    }
-
-    metadata[modelName] = {
-      relations,
-      compoundUniqueFields: parsedModel?.compoundUniqueFields ?? {},
-    };
-  }
-
-  return metadata;
-}
-
-function hasScopedFieldPredicate(
-  model: string,
-  where: Record<string, any>,
-  metadata: Record<string, ModelMetadata>,
-  field: string
-): boolean {
-  if (hasOwn(where, field)) {
-    return true;
-  }
-
-  const relations = metadata[model]?.relations ?? {};
-
-  for (const [key, value] of Object.entries(where)) {
-    if (key !== 'AND' && key !== 'OR' && key !== 'NOT') {
-      if (relations[key]) {
-        continue;
-      }
-      continue;
-    }
-
-    if (Array.isArray(value)) {
-      if (value.some((entry) => isObject(entry) && hasScopedFieldPredicate(model, entry, metadata, field))) {
-        return true;
-      }
-      continue;
-    }
-
-    if (isObject(value) && hasScopedFieldPredicate(model, value, metadata, field)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function addActiveFilter(
-  model: string,
-  where: Record<string, any>,
-  metadata: Record<string, ModelMetadata>,
-  models: ResolvedModels
-): Record<string, any> {
-  const cfg = models.get(model);
-  if (!cfg || hasScopedFieldPredicate(model, where, metadata, cfg.field)) {
-    return where;
-  }
-
-  return {
-    ...where,
-    [cfg.field]: null,
-  };
 }
 
 function rewriteLogicalValue(
@@ -242,7 +63,7 @@ function rewriteListRelationFilter(
       const cfg = models.get(targetModel);
 
       next[modifier] =
-        cfg && !hasOwn(value[modifier], cfg.field)
+        cfg && !hasScopedFieldPredicate(targetModel, value[modifier], metadata, cfg.field)
           ? {
               OR: [{ [cfg.field]: { not: null } }, rewritten],
             }
@@ -313,30 +134,6 @@ function rewriteWhere(
   }
 
   return shouldApplyCurrentModelFilter ? addActiveFilter(model, next, metadata, models) : next;
-}
-
-function expandCompoundUniqueWhere(
-  model: string,
-  where: Record<string, any>,
-  metadata: Record<string, ModelMetadata>
-): Record<string, any> {
-  const next: Record<string, any> = { ...where };
-  const compoundUniqueFields = metadata[model]?.compoundUniqueFields ?? {};
-
-  for (const [alias, fields] of Object.entries(compoundUniqueFields)) {
-    if (!isObject(next[alias])) continue;
-
-    const compoundValue = next[alias];
-    delete next[alias];
-
-    for (const field of fields) {
-      if (hasOwn(compoundValue, field) && !hasOwn(next, field)) {
-        next[field] = compoundValue[field];
-      }
-    }
-  }
-
-  return next;
 }
 
 function rewriteSelectionSet(
@@ -472,11 +269,7 @@ export function normalizeFilterOnlyReadArgs(
   return nextArgs;
 }
 
-function processRelationValue(
-  relationNode: ReadRelationNode,
-  value: any,
-  models: ResolvedModels
-): any {
+function processRelationValue(relationNode: ReadRelationNode, value: any, models: ResolvedModels): any {
   if (value == null) {
     return value;
   }
