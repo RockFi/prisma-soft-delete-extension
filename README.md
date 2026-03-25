@@ -30,14 +30,19 @@ Extend your Prisma client:
 
 ```ts
 import { PrismaClient } from '@prisma/client';
-import { createSoftDeleteExtension } from '@thenkei/prisma-soft-delete-extension';
+import {
+  createSoftDeleteExtension,
+  withSoftDeleteTypes,
+} from '@thenkei/prisma-soft-delete-extension';
 
-const prisma = new PrismaClient().$extends(
-  createSoftDeleteExtension({
-    models: {
-      User: true,
-    },
-  })
+const prisma = withSoftDeleteTypes(
+  new PrismaClient().$extends(
+    createSoftDeleteExtension({
+      models: {
+        User: true,
+      },
+    })
+  )
 );
 ```
 
@@ -128,10 +133,14 @@ Unconfigured models are passthrough for all query operations.
 |-----------|---------------------------|
 | root `update()` | Active-only by default; explicit `deletedAt` predicates override |
 | root `updateMany()` | Active-only by default; explicit `deletedAt` predicates override |
+| root `updateManyAndReturn()` | Active-only by default; explicit `deletedAt` predicates override |
 | root `upsert()` | Throws if the target row exists and is soft-deleted |
 | nested toMany `update()` | Active-only by default; explicit `deletedAt` predicates override |
 | nested toMany `updateMany()` | Active-only by default; explicit `deletedAt` predicates override |
+| nested toMany `delete()` | Throws to prevent accidental hard delete |
+| nested toMany `deleteMany()` | Throws to prevent accidental hard delete |
 | nested toMany `upsert()` | Throws if the target row exists and is soft-deleted |
+| nested toOne `delete()` | Throws to prevent accidental hard delete |
 | nested toOne `update()` | Throws |
 | nested toOne `upsert()` | Throws |
 
@@ -155,6 +164,8 @@ Pass `includeSoftDeleted: true` to these operations:
 - `aggregate()`
 - `groupBy()`
 
+For TypeScript projects, wrap the final extended client in `withSoftDeleteTypes()` to expose `includeSoftDeleted` on supported read methods without call-site casts.
+
 Examples:
 
 ```ts
@@ -176,6 +187,17 @@ const groupedUsers = await prisma.user.groupBy({
 When `includeSoftDeleted: true` is set, nested relation filtering is skipped for that operation as well.
 
 This option does not affect lifecycle methods, raw queries, or write hardening.
+
+## Nested Delete Guardrails
+
+Nested relation `delete` and `deleteMany` calls against configured soft-delete models are rejected. Allowing those Prisma envelopes through would physically remove rows and bypass the extension's safety guarantees.
+
+For configured models:
+
+- use the model delegate `delete()` / `deleteMany()` to perform a soft delete
+- use `hardDelete()` / `hardDeleteMany()` only when you intend a permanent removal
+
+Unconfigured models remain passthrough, including nested deletes.
 
 ## Restore and Hard Delete Examples
 

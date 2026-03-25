@@ -296,6 +296,142 @@ describe.each(integrationProviders)('soft delete: update paths (%s)', (provider:
     expect(row.content).toBe('Updated deleted');
   });
 
+  it('nested toMany delete throws for a configured soft-delete model', async () => {
+    const user = await raw.user.create({ data: { name: 'Alice' } });
+    const post = await raw.post.create({ data: { title: 'Post', authorId: user.id } });
+    const comment = await raw.comment.create({
+      data: { content: 'Delete me', authorId: user.id, postId: post.id },
+    });
+
+    await expect(
+      client.user.update({
+        where: { id: user.id },
+        data: {
+          comments: {
+            delete: { id: comment.id },
+          },
+        },
+      })
+    ).rejects.toThrow(
+      'prisma-soft-delete-extension: delete of model "Comment" through "User.comments" found. Nested hard deletes for configured soft-delete models are not supported because they bypass soft delete and permanently remove rows.'
+    );
+
+    const row = await raw.comment.findUnique({ where: { id: comment.id } });
+    expect(row).not.toBeNull();
+    expect(row!.deletedAt).toBeNull();
+  });
+
+  it('nested toMany deleteMany throws for a configured soft-delete model', async () => {
+    const user = await raw.user.create({ data: { name: 'Alice' } });
+    const post = await raw.post.create({ data: { title: 'Post', authorId: user.id } });
+    await raw.comment.createMany({
+      data: [
+        { content: 'Delete me', authorId: user.id, postId: post.id },
+        { content: 'Delete me too', authorId: user.id, postId: post.id },
+      ],
+    });
+
+    await expect(
+      client.user.update({
+        where: { id: user.id },
+        data: {
+          comments: {
+            deleteMany: { content: { startsWith: 'Delete me' } },
+          },
+        },
+      })
+    ).rejects.toThrow(
+      'prisma-soft-delete-extension: deleteMany of model "Comment" through "User.comments" found. Nested hard deletes for configured soft-delete models are not supported because they bypass soft delete and permanently remove rows.'
+    );
+
+    const rows = await raw.comment.findMany({ where: { postId: post.id } });
+    expect(rows).toHaveLength(2);
+    rows.forEach((row: any) => expect(row.deletedAt).toBeNull());
+  });
+
+  it('nested toOne delete throws for a configured soft-delete model', async () => {
+    const profile = await raw.profile.create({ data: { bio: 'Delete me' } });
+    const user = await raw.user.create({
+      data: { name: 'Alice', profileId: profile.id },
+    });
+
+    await expect(
+      client.user.update({
+        where: { id: user.id },
+        data: {
+          profile: {
+            delete: true,
+          },
+        },
+      })
+    ).rejects.toThrow(
+      'prisma-soft-delete-extension: delete of model "Profile" through "User.profile" found. Nested hard deletes for configured soft-delete models are not supported because they bypass soft delete and permanently remove rows.'
+    );
+
+    const row = await raw.profile.findUnique({ where: { id: profile.id } });
+    expect(row).not.toBeNull();
+    expect(row!.deletedAt).toBeNull();
+  });
+
+  it('nested delete remains passthrough for an unconfigured model', async () => {
+    const user = await raw.user.create({ data: { name: 'Alice' } });
+    const post = await raw.post.create({ data: { title: 'Post', authorId: user.id } });
+    const tag = await raw.tag.create({
+      data: {
+        name: 'delete-me',
+        posts: {
+          connect: { id: post.id },
+        },
+      },
+    });
+
+    await client.post.update({
+      where: { id: post.id },
+      data: {
+        tags: {
+          delete: { id: tag.id },
+        },
+      },
+    });
+
+    const row = await raw.tag.findUnique({ where: { id: tag.id } });
+    expect(row).toBeNull();
+  });
+
+  it('nested deleteMany remains passthrough for an unconfigured model', async () => {
+    const user = await raw.user.create({ data: { name: 'Alice' } });
+    const post = await raw.post.create({ data: { title: 'Post', authorId: user.id } });
+
+    await raw.tag.create({
+      data: {
+        name: 'delete-me',
+        posts: {
+          connect: { id: post.id },
+        },
+      },
+    });
+    await raw.tag.create({
+      data: {
+        name: 'delete-me-too',
+        posts: {
+          connect: { id: post.id },
+        },
+      },
+    });
+
+    await client.post.update({
+      where: { id: post.id },
+      data: {
+        tags: {
+          deleteMany: { name: { startsWith: 'delete-me' } },
+        },
+      },
+    });
+
+    const rows = await raw.tag.findMany({});
+    expect(rows).toHaveLength(0);
+  });
+
   it('nested toMany upsert throws when the target row is soft-deleted', async () => {
     const user = await raw.user.create({ data: { name: 'Alice' } });
     const post = await raw.post.create({ data: { title: 'Post', authorId: user.id } });
@@ -346,5 +482,44 @@ describe.each(integrationProviders)('soft delete: update paths (%s)', (provider:
 
     const row = await raw.comment.findUniqueOrThrow({ where: { id: activeComment.id } });
     expect(row.content).toBe('Upserted active');
+  });
+
+  it('updateManyAndReturn only updates active rows by default', async () => {
+    const active = await raw.user.create({ data: { name: 'match' } });
+    const deleted = await raw.user.create({ data: { name: 'match', deletedAt: new Date() } });
+
+    const result = await client.user.updateManyAndReturn({
+      where: { name: 'match' },
+      data: { name: 'updated' },
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe(active.id);
+
+    const activeRow = await raw.user.findUniqueOrThrow({ where: { id: active.id } });
+    const deletedRow = await raw.user.findUniqueOrThrow({ where: { id: deleted.id } });
+    expect(activeRow.name).toBe('updated');
+    expect(deletedRow.name).toBe('match');
+  });
+
+  it('updateManyAndReturn preserves explicit deletedAt overrides', async () => {
+    const active = await raw.user.create({ data: { name: 'match' } });
+    const deleted = await raw.user.create({ data: { name: 'match', deletedAt: new Date() } });
+
+    const result = await client.user.updateManyAndReturn({
+      where: {
+        name: 'match',
+        deletedAt: { not: null },
+      },
+      data: { name: 'deleted-updated' },
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe(deleted.id);
+
+    const activeRow = await raw.user.findUniqueOrThrow({ where: { id: active.id } });
+    const deletedRow = await raw.user.findUniqueOrThrow({ where: { id: deleted.id } });
+    expect(activeRow.name).toBe('match');
+    expect(deletedRow.name).toBe('deleted-updated');
   });
 });
