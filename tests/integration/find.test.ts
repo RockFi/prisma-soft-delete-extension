@@ -60,6 +60,76 @@ describe.each(integrationProviders)('soft delete: find operations (%s)', (provid
     });
   });
 
+  it('findUnique returns null for a soft-deleted compound-unique record', async () => {
+    await raw.membership.create({
+      data: {
+        workspaceId: 42,
+        externalId: 'soft-deleted',
+        name: 'Gone',
+        deletedAt: new Date(),
+      },
+    });
+
+    const result = await client.membership.findUnique({
+      where: {
+        workspaceId_externalId: {
+          workspaceId: 42,
+          externalId: 'soft-deleted',
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it('findUniqueOrThrow throws P2025 for a soft-deleted compound-unique record', async () => {
+    await raw.membership.create({
+      data: {
+        workspaceId: 42,
+        externalId: 'soft-deleted',
+        name: 'Gone',
+        deletedAt: new Date(),
+      },
+    });
+
+    await expect(
+      client.membership.findUniqueOrThrow({
+        where: {
+          workspaceId_externalId: {
+            workspaceId: 42,
+            externalId: 'soft-deleted',
+          },
+        },
+      })
+    ).rejects.toMatchObject({
+      code: 'P2025',
+    });
+  });
+
+  it('findUnique with includeSoftDeleted: true returns a soft-deleted compound-unique record', async () => {
+    const membership = await raw.membership.create({
+      data: {
+        workspaceId: 42,
+        externalId: 'soft-deleted',
+        name: 'Gone',
+        deletedAt: new Date(),
+      },
+    });
+
+    const result = await (client.membership.findUnique as any)({
+      where: {
+        workspaceId_externalId: {
+          workspaceId: 42,
+          externalId: 'soft-deleted',
+        },
+      },
+      includeSoftDeleted: true,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result.id).toBe(membership.id);
+  });
+
   it('findMany on Tag works normally (passthrough)', async () => {
     await raw.tag.createMany({ data: [{ name: 'ts' }, { name: 'js' }] });
     const tags = await client.tag.findMany({});

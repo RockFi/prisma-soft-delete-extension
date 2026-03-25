@@ -1,7 +1,12 @@
 import { Prisma } from '@prisma/client';
 import { resolveConfig } from './config';
 import type { SoftDeleteConfig } from './types';
-import { buildModelMetadata, normalizeReadArgs, postProcessReadResult } from './readPath';
+import {
+  buildModelMetadata,
+  normalizeFilterOnlyReadArgs,
+  normalizeReadArgs,
+  postProcessReadResult,
+} from './readPath';
 import { normalizeRootUpdateManyArgs, normalizeWriteArgs } from './writePath';
 
 export function createSoftDeleteExtension(config: SoftDeleteConfig) {
@@ -15,7 +20,7 @@ export function createSoftDeleteExtension(config: SoftDeleteConfig) {
       args: any,
       query: (args: any) => Promise<any>
     ): Promise<any> {
-      const extArgs = args as typeof args & { includeSoftDeleted?: boolean };
+      const extArgs = ((args ?? {}) as typeof args & { includeSoftDeleted?: boolean });
       const { includeSoftDeleted, ...rest } = extArgs;
       if (includeSoftDeleted) {
         return query(rest as typeof args);
@@ -32,7 +37,7 @@ export function createSoftDeleteExtension(config: SoftDeleteConfig) {
       query: (args: any) => Promise<any>,
       orThrow: boolean
     ): Promise<any> {
-      const extArgs = args as typeof args & { includeSoftDeleted?: boolean };
+      const extArgs = ((args ?? {}) as typeof args & { includeSoftDeleted?: boolean });
       const { includeSoftDeleted, ...rest } = extArgs;
       if (includeSoftDeleted) {
         return query(rest as typeof args);
@@ -52,6 +57,20 @@ export function createSoftDeleteExtension(config: SoftDeleteConfig) {
         normalized.args
       );
       return postProcessReadResult(result, normalized.node, models);
+    }
+
+    async function handleFilterOnlyRead(
+      model: string,
+      args: any,
+      query: (args: any) => Promise<any>
+    ): Promise<any> {
+      const extArgs = ((args ?? {}) as typeof args & { includeSoftDeleted?: boolean });
+      const { includeSoftDeleted, ...rest } = extArgs;
+      if (includeSoftDeleted) {
+        return query(rest as typeof args);
+      }
+
+      return query(normalizeFilterOnlyReadArgs(model, rest, metadata, models) as typeof args);
     }
 
     return client.$extends({
@@ -98,6 +117,15 @@ export function createSoftDeleteExtension(config: SoftDeleteConfig) {
           },
           async findUniqueOrThrow({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
             return handleUniqueRead(model, args, query, true);
+          },
+          async count({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
+            return handleFilterOnlyRead(model, args, query);
+          },
+          async aggregate({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
+            return handleFilterOnlyRead(model, args, query);
+          },
+          async groupBy({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
+            return handleFilterOnlyRead(model, args, query);
           },
         },
       },
