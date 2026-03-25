@@ -274,3 +274,10 @@ See [CHANGELOG.md](./CHANGELOG.md) for release history and [UPGRADE.md](./UPGRAD
 ## License
 
 MIT
+
+## Contributing
+
+- Run `npm run ci` before you open a pull request.
+- Use conventional commits so semantic-release can calculate the next version correctly.
+- Do not manually bump `package.json` versions or hand-edit release entries in `CHANGELOG.md`.
+- Keep changes small and focused, and update `README.md` or `UPGRADE.md` when public behavior changes.
