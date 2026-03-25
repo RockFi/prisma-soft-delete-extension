@@ -277,7 +277,10 @@ MIT
 
 ## Contributing
 
-- Run `npm run ci` before you open a pull request.
-- Use conventional commits so semantic-release can calculate the next version correctly.
-- Do not manually bump `package.json` versions or hand-edit release entries in `CHANGELOG.md`.
-- Keep changes small and focused, and update `README.md` or `UPGRADE.md` when public behavior changes.
+1. Install dependencies with `npm install`.
+2. Run `npm run ci` before you open a pull request.
+3. Use conventional commits so semantic-release can calculate the next version correctly.
+4. Do not manually bump `package.json` versions or hand-edit release entries in `CHANGELOG.md`.
+5. Keep changes small and focused, and update `README.md` or `UPGRADE.md` when public behavior changes.
+
+Patch and minor releases are cut automatically from `main` by semantic-release after CI passes, so the only supported release input is a correctly formatted commit history.
