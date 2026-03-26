@@ -16,6 +16,15 @@ import {
   normalizeWriteArgs,
 } from './writePath';
 
+/**
+ * Creates a Prisma client extension that adds soft-delete semantics to configured models.
+ *
+ * Configured model delegates keep Prisma's normal query surface but:
+ * - rewrite `delete()` and `deleteMany()` into timestamp updates
+ * - hide soft-deleted rows from reads unless `includeSoftDeleted: true` is passed at runtime
+ * - expose `restore()`, `restoreMany()`, `hardDelete()`, and `hardDeleteMany()` helpers
+ * - guard write paths that would otherwise mutate or hard-delete soft-deleted rows silently
+ */
 export function createSoftDeleteExtension(config: SoftDeleteConfig) {
   const models = resolveConfig(config);
 
@@ -108,6 +117,9 @@ export function createSoftDeleteExtension(config: SoftDeleteConfig) {
             return query(normalizedArgs);
           },
           async updateMany({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
+            return query(normalizeRootUpdateManyArgs(model, args, metadata, models));
+          },
+          async updateManyAndReturn({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {
             return query(normalizeRootUpdateManyArgs(model, args, metadata, models));
           },
           async upsert({ model, args, query }: { model: string; args: any; query: (args: any) => Promise<any> }) {

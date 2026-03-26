@@ -49,6 +49,7 @@ export function createLifecycleMethods(
   models: ResolvedModels
 ) {
   return {
+    /** Restores one previously soft-deleted row on a configured model delegate. */
     async restore<T, A extends RestoreArgs<T>>(
       this: T,
       args: Prisma.Exact<A, RestoreArgs<T>>
@@ -70,6 +71,7 @@ export function createLifecycleMethods(
       }) as Promise<RestoreResult<T, A>>;
     },
 
+    /** Restores all matching soft-deleted rows on a configured model delegate. */
     async restoreMany<T, A extends RestoreManyArgs<T>>(
       this: T,
       args?: Prisma.Exact<A, RestoreManyArgs<T>>
@@ -86,6 +88,7 @@ export function createLifecycleMethods(
       }) as Promise<RestoreManyResult<T, A>>;
     },
 
+    /** Permanently deletes one previously soft-deleted row on a configured model delegate. */
     async hardDelete<T, A extends HardDeleteArgs<T>>(
       this: T,
       args: Prisma.Exact<A, HardDeleteArgs<T>>
@@ -102,6 +105,7 @@ export function createLifecycleMethods(
       return delegate.delete(args as any) as Promise<HardDeleteResult<T, A>>;
     },
 
+    /** Permanently deletes all matching soft-deleted rows on a configured model delegate. */
     async hardDeleteMany<T, A extends HardDeleteManyArgs<T>>(
       this: T,
       args?: Prisma.Exact<A, HardDeleteManyArgs<T>>

@@ -37,6 +37,16 @@ function throwDeletedUpsertError(targetModel: string, path?: string): never {
   );
 }
 
+function throwNestedDeleteError(
+  operation: 'delete' | 'deleteMany',
+  targetModel: string,
+  path: string
+): never {
+  throw new Error(
+    `prisma-soft-delete-extension: ${operation} of model "${targetModel}" through "${path}" found. Nested hard deletes for configured soft-delete models are not supported because they bypass soft delete and permanently remove rows.`
+  );
+}
+
 function normalizeUpdateEnvelope(
   targetModel: string,
   value: Record<string, any>,
@@ -72,6 +82,15 @@ function normalizeNestedData(
 
     const relationPath = `${path}.${fieldName}`;
     const relationPayload: Record<string, any> = { ...fieldValue };
+    const targetIsSoftDeleted = models.has(relation.targetModel);
+
+    if (targetIsSoftDeleted && relationPayload.delete !== undefined) {
+      throwNestedDeleteError('delete', relation.targetModel, relationPath);
+    }
+
+    if (targetIsSoftDeleted && relationPayload.deleteMany !== undefined) {
+      throwNestedDeleteError('deleteMany', relation.targetModel, relationPath);
+    }
 
     if (relation.isList) {
       if (relationPayload.updateMany !== undefined) {
@@ -126,11 +145,11 @@ function normalizeNestedData(
       continue;
     }
 
-    if (models.has(relation.targetModel) && relationPayload.update !== undefined) {
+    if (targetIsSoftDeleted && relationPayload.update !== undefined) {
       throwToOneWriteError('update', relation.targetModel, relationPath);
     }
 
-    if (models.has(relation.targetModel) && relationPayload.upsert !== undefined) {
+    if (targetIsSoftDeleted && relationPayload.upsert !== undefined) {
       throwToOneWriteError('upsert', relation.targetModel, relationPath);
     }
 
