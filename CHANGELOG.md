@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/RockFi/prisma-soft-delete-extension/compare/v1.0.2...v1.1.0) (2026-03-26)
+
+
+### Features
+
+* harden soft delete extension behavior ([#6](https://github.com/RockFi/prisma-soft-delete-extension/issues/6)) ([82e2b29](https://github.com/RockFi/prisma-soft-delete-extension/commit/82e2b299e26ae872380491f02cb07113c7250d89))
+
 ## [1.0.2](https://github.com/RockFi/prisma-soft-delete-extension/compare/v1.0.1...v1.0.2) (2026-03-25)
 
 
